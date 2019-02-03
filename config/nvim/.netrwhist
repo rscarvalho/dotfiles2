@@ -1,0 +1,9 @@
+let g:netrw_dirhistmax  =10
+let g:netrw_dirhist_cnt =7
+let g:netrw_dirhist_1='/Users/rodolfo/code/related-artists/related-artists-curation-ui'
+let g:netrw_dirhist_2='/Users/rodolfo/code/ranking/ranking-viewer/src/lib'
+let g:netrw_dirhist_3='/Users/rodolfo/code/ranking/ranking-viewer'
+let g:netrw_dirhist_4='/Users/rodolfo/code/ranking/ranking-viewer/.git'
+let g:netrw_dirhist_5='/Users/rodolfo/code/ranking/ranking-viewer'
+let g:netrw_dirhist_6='/Users/rodolfo/code/ranking/ranking-viewer/src/containers'
+let g:netrw_dirhist_7='/Users/rodolfo/code/ranking/ranking-viewer/src'

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD| xargs echo -n)
+TARGET_BRANCH=${1:-master}
+
+echo "Cleaning feature branch ${FEATURE_BRANCH} (coming back to ${TARGET_BRANCH})"
+
+git checkout ${TARGET_BRANCH}
+git fetch -ap
+git pull --rebase
+
+git branch -d ${FEATURE_BRANCH}

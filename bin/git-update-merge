@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+FEATURE_BRANCH=$(git rev-parse --abbrev-ref HEAD| xargs echo -n)
+TARGET_BRANCH=${1:-master}
+
+echo "Updating branch ${FEATURE_BRANCH} from ${TARGET_BRANCH}"
+
+git checkout ${TARGET_BRANCH}
+git pull --rebase
+git checkout ${FEATURE_BRANCH}
+git merge ${TARGET_BRANCH}

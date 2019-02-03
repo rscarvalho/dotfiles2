@@ -1,0 +1,180 @@
+#!/usr/bin/env python
+from __future__ import print_function, with_statement
+
+import sys
+import os
+import subprocess
+import argparse
+import json
+import ssl
+
+try:
+    from urllib.request import urlopen, Request
+except:
+    from urllib2 import urlopen, Request
+
+
+class DeployConfig(object):
+    def __init__(self, deployment_name, container_name, build_id, tag_format=None):
+        self.deployment = deployment_name
+        self.container = container_name
+        self.build_id = build_id
+        self.tag_format = tag_format or '{}'
+
+    def get_image_name(self, deployment_spec):
+        containers = deployment_spec['spec']['template']['spec']['containers']
+        containers = [c for c in containers if c.name == self.container]
+        if not containers:
+            raise KeyError('Container "%s" could not be found' %
+                           self.container)
+        elif len(containers) > 1:
+            raise ValueError(
+                'Deployment spec has multiple containers named "%s"' % self.container)
+        return containers[0]['image']
+
+
+class CircleCIClient(object):
+    BASE_URL = 'https://circleci.com/api/v1.1'
+    TOKEN = 'b3cee238749582f5c2a86cd01ba50057862cc4f7'
+
+    def __init__(self, *args, **kwargs):
+        self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLSv1)
+
+    def get_latest_build_num(self, project):
+        url = '{}/project/github/pushlink/{}'.format(
+            self.BASE_URL, project)
+        url += '?limit=1'
+
+        return json.loads(self._execute_request(url))[0]['build_num']
+
+    def _execute_request(self, url):
+        url += '&' if '?' in url else '?'
+        url += 'circle-token=' + self.TOKEN
+        request = Request(url, headers={'Accept': 'application/json'})
+        response = urlopen(request, context=self.ssl_context)
+        data = response.read()
+        return data
+
+
+class KubectlClient(object):
+    def __init__(self):
+        kubectl_paths = [path for path in [os.path.join(p, 'kubectl')
+                                           for p in os.environ.get('PATH', '').split(os.pathsep)]
+                         if os.path.exists(path)]
+        if not kubectl_paths:
+            raise ValueError('kubectl not found in PATH')
+        self.kubectl_path = kubectl_paths[0]
+
+    def _run_kubectl(self, command, options=None):
+        all_options = {'output': 'json'}
+        all_options.update(options or {})
+
+        options_str = []
+        for key, value in all_options.items():
+            options_str.append('--{}={}'.format(key, value))
+
+        return subprocess.check_output(
+            [self.kubectl_path] + command.split(' ') + options_str
+        )
+
+    def _print_watch_kubectl(self, command, options=None):
+        options = options or {}
+        options_str = []
+        for key, value in options.items():
+            options_str.append('--{}={}'.format(key, value))
+        cmd = [self.kubectl_path] + command.split(' ') + options_str
+        popen = subprocess.Popen(cmd,
+                                 stdout=subprocess.PIPE, universal_newlines=True)
+
+        for stdout_line in iter(popen.stdout.readline, ""):
+            yield stdout_line
+        popen.stdout.close()
+        return_code = popen.wait()
+        if return_code:
+            raise subprocess.CalledProcessError(return_code, cmd)
+
+    def get_deployment_image(self, deployment, container):
+        output = self._run_kubectl('get deployment ' + deployment)
+        return [
+            c for c in json.loads(output)['spec']['template']['spec']['containers']
+            if c['name'] == container
+        ][0]['image'].split(':')
+
+    def set_deployment_image(self, deployment, container, full_image_name):
+        output = self._run_kubectl(
+            'set image deployments/{} {}={}'.format(deployment, container, full_image_name), {'output': 'wide'})
+        print(output)
+        for line in self._print_watch_kubectl(
+                'rollout status deployments/{} -w'.format(deployment)):
+            print(line)
+
+
+class Deployer(object):
+    def __init__(self, config, args):
+        self.config = config
+        self.args = args
+        self.build_client = CircleCIClient()
+        self.kubectl_client = KubectlClient()
+
+    def get_build_info(self):
+        if self.args.build:
+            return self.args.build
+
+        response = self.build_client.get_latest_build_num(self.config.build_id)
+        return response
+
+    def get_image_tag(self):
+        if self.args.image_name:
+            full_name = self.args.image_name.split(':')
+            return 'latest' if len(full_name) == 1 else full_name[1]
+        return self.config.tag_format.format(self.get_build_info())
+
+    def get_image_name(self):
+        if self.args.image_name:
+            return self.args.image_name.split(':')[0]
+        return self.kubectl_client.get_deployment_image(self.config.deployment, self.config.container)[0]
+
+    def deploy(self):
+        tag = self.get_image_tag()
+        image = self.get_image_name()
+        deployment = self.config.deployment
+        container = self.config.container
+        print('Deploying {}:{} to deployments/{}:{}'.format(image,
+                                                            tag, deployment, container))
+        self.kubectl_client.set_deployment_image(
+            deployment, container, '{}:{}'.format(image, tag))
+
+
+def parse_args(deployments):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('deployable', metavar='DEPLOYABLE',
+                        help='The name of the deployable (%s)' % ','.join(
+                            deployments.keys()),
+                        choices=list(deployments.keys()))
+    parser.add_argument('-b', '--build',
+                        help='Overrides the build to be deployed')
+    parser.add_argument('-i', '--image-name',
+                        help='Full image name and tag (overrides current deployment image)')
+
+    return parser.parse_args()
+
+
+def main():
+    """Entrypoint of the program
+    """
+    deployments = {
+        'web': DeployConfig('pushlink-web-pushlink-web', 'app', 'pushlink-web', tag_format='master-{}'),
+        'web-nginx': DeployConfig('pushlink-web-pushlink-web', 'nginx', 'docker-images'),
+        'push': DeployConfig('pushlink-push-pushlink-push', 'push-server', 'pushlink-push', tag_format='master-{}'),
+        'jobs': DeployConfig('scheduled-jobs-scheduled-jobs', 'jobs', 'pushlink-v3'),
+    }
+
+    args = parse_args(deployments)
+    config = deployments[args.deployable]
+
+    deployer = Deployer(config, args)
+    deployer.deploy()
+
+
+if __name__ == "__main__":
+    main()

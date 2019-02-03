@@ -1,0 +1,16 @@
+.idea/
+.vscode/
+virtualenv/
+.idea/
+.DS_Store
+jsconfig.json
+tsconfig.json
+typings.json
+typings/
+target/
+*.iml
+.project
+.settings/
+.classpath
+.factorypath
+*.pyc
